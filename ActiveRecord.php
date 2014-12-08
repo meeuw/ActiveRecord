@@ -20,7 +20,7 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN 
 THE SOFTWARE.
 **/
-
+        
 abstract class ActiveRecord
 {    
     protected $data = array();
@@ -41,7 +41,7 @@ abstract class ActiveRecord
     protected $oneToOneMethod = '';
     const FOREIGN_TO_PRIMARY = 0;
     const PRIMARY_TO_FOREIGN = 1;
-    
+        
     function ActiveRecord()
     {
         $this->initTable();
@@ -62,26 +62,27 @@ abstract class ActiveRecord
             $this->oneToOnesF2P[] = $object;
         }
     }
-    
-    public function hasMany($object, $hooktable = false)
+        
+    public function hasMany($object, $hooktable = false, $colThis = false, $colForeign = false)
     {
         $relation = new arRelation();
         $relation->setClass($object);
         $relation->setHooktable($hooktable);
-        
+        $relation->setColThis($colThis);
+        $relation->setColForeign($colForeign);
         $this->oneToManys[] = $relation;    
     }
-    
+        
     protected function addHookTable($table)
     {
         $this->hookTables[] = $table;
     }
-    
+        
     protected function getHookTables()
     {
         return $this->hookTables;
     }
-    
+        
     protected function hasHookTables()
     {
         if(isset($this->hookTables) && count($this->hookTables) > 0)
@@ -93,7 +94,7 @@ abstract class ActiveRecord
             return false;
         }
     }
-    
+        
     public function getKeyField()
     {
         foreach($this->fieldObjects as $field)
@@ -105,14 +106,16 @@ abstract class ActiveRecord
         }
         return false;
     }
-    
+        
     public function get($loadForeigns = false)
     {
         $this->exists = false;
         
-        $sql = "SELECT * FROM `{$this->table}`";
+        $sql = "SELECT * FROM `{$this->database}`.`{$this->table}`";
         if(count($this->fieldObjects) > 0)
             $sql .= " WHERE ".implode(' AND ', $this->getPairedFields($this->getFields()));
+        $sql .= 'LIMIT 1';
+        //echo '[$sql: ' . $sql . ']<br/>' . "\n";
         $res = mysql_query($sql) or die('Error on line '.__LINE__.' '.mysql_error()." : ".$sql);
         
         if(mysql_num_rows($res) > 0)
@@ -128,7 +131,7 @@ abstract class ActiveRecord
         
         return $this->exists;
     }
-    
+        
     public function getBySQL($sql)
     {
         $this->exists = false;
@@ -148,23 +151,23 @@ abstract class ActiveRecord
         
         return $this->exists;
     }
-    
+        
     public function loadForeigns()
     {        
         if(!$this->foreignsLoaded)
         {
             $this->initRelations();
-            
+        
             // load one to ones
             $this->loadForeignsOneToOne();
-                
+        
             // load one to many
             $this->loadForeignsOneToMany();
-            
+        
             $this->foreignsLoaded = true;
         }
     }
-    
+        
     protected function loadForeignsOneToOne()
     {
         //Primary to Foreign
@@ -176,11 +179,8 @@ abstract class ActiveRecord
                     $this->getKeyField()->getName(), 
                     $this->getAttrib($this->getKeyField()->getName())                                    
                 );
-                
                 $relation->get();                
-                     
                 $this->foreignOneToOneObjects[get_class($relation)] = $relation;
-                
             }            
         }
         
@@ -193,31 +193,26 @@ abstract class ActiveRecord
                     $relation->getKeyField()->getName(), 
                     $this->getAttrib($relation->getKeyField()->getName())                                    
                 );
-                
+        
                 $relation->get();                
-                     
+        
                 $this->foreignOneToOneObjects[get_class($relation)] = $relation;
-                
             }            
         }
-
-        
     }
-    
+        
     protected function loadForeignsOneToMany()
     {
         foreach($this->oneToManys as $relation_object)
         {
             $relation = $relation_object->getClass();
             $this->foreignOneToManysObjects[get_class($relation)] = array();
-                        
             if(!$relation_object->getHooktable())
             {                                
                 $relation->setAttrib(
                     $this->getKeyField()->getName(), 
                     $this->getAttrib($this->getKeyField()->getName())                    
                 );
-                
                 foreach($relation->getAll() as $obj)
                 {
                     $this->foreignOneToManysObjects[get_class($relation)][] = $obj;
@@ -225,48 +220,83 @@ abstract class ActiveRecord
             }
             else
             {                
-                            // query hooktable
-                            $query = "SELECT * FROM ".$relation_object->getHooktable().
-                            " WHERE ".$this->getKeyField()->getName()." = '".$this->getKeyField()->getValue()."'";            
-                            
-                            $res = mysql_query($query)
-                            or die('Error on line '.__LINE__.' '.mysql_error());
-                        
-                            while($row = mysql_fetch_assoc($res))
-                            {                                        
-                                $objName = get_class($relation);
-                                $obj = new $objName();
-                                
-                                $obj->setAttrib($relation->getKeyField()->getName(), $row[$relation->getKeyField()->getName()]);                    
-                                $obj->get();                    
-                                $this->foreignOneToManysObjects[get_class($relation)][] = $obj;                                    
-                            }
+                //ok we have a hooktable, lets see if you have special hook-columns
+                
+                if ($relation_object->getColThis())
+                {
+                    $query = "SELECT * FROM `{$this->database}`.`{$relation_object->getHooktable()}`".
+                    " WHERE ".$relation_object->getColThis()." = '".$this->getKeyField()->getValue()."'";            
+                }
+                else
+                {
+                    $query = "SELECT * FROM `{$this->database}`.`{$relation_object->getHooktable()}`".
+                    " WHERE ".$this->getKeyField()->getName()." = '".$this->getKeyField()->getValue()."'";            
+                }
+
+                // query hooktable
+        
+                $res = mysql_query($query)
+                or die('Error on line '.__LINE__.' '.mysql_error());
+        
+                while($row = mysql_fetch_assoc($res))
+                {                                        
+                    $objName = get_class($relation);
+                    $obj = new $objName();
+                    if ($relation_object->getColForeign())
+                    {
+                        $obj->setAttrib($relation->getKeyField()->getName(), $row[$relation_object->getColForeign()]);                    
+                        $obj->get();
+                        $this->foreignOneToManysObjects[get_class($relation)][] = $obj;
+                    }
+                    else
+                    {
+                        $obj->setAttrib($relation->getKeyField()->getName(), $row[$relation->getKeyField()->getName()]);                    
+                        $obj->get();
+                        $this->foreignOneToManysObjects[get_class($relation)][] = $obj;
+                    }
+                }
             }
         }
     }
-    
+        
     public function getOneToOne($objectName)
     {
-        return $this->foreignOneToOneObjects[$objectName];
+        if (array_key_exists($objectName, $this->foreignOneToOneObjects))
+        {
+            return $this->foreignOneToOneObjects[$objectName];    
+        }
+        else
+        {
+            //echo ("AR::OnToOne: Key $objectName does not exist");
+            return false;
+        }
     }
-    
+        
     public function getOneToMany($objectName)
     {    
-        return $this->foreignOneToManysObjects[$objectName];
+        if (array_key_exists($objectName, $this->foreignOneToManysObjects))
+        {
+            return $this->foreignOneToManysObjects[$objectName];
+        }
+        else
+        {
+            //echo ("AR::OnToMany: Key $objectName does not exist");
+            return false;
+        }
     }
-    
+        
     public function getAll()
     {
-        $sql = "SELECT * FROM {$this->table}";
+        $sql = "SELECT * FROM `{$this->database}`.`{$this->table}`";
         if(count($this->getPairedFields()) > 0)
             $sql .= " WHERE ".implode(' AND ', $this->getPairedFields());
-            
+        
         if(count($this->orderbyFields) > 0)
             $sql .= " ORDER BY ".implode(',', $this->orderbyFields);
-
+        
         if(count($this->groupbyFields) > 0)
             $sql .= " GROUP BY ".implode(',', $this->groupbyFields);
-                
+        
         $res = mysql_query($sql) or die('Error on line '.__LINE__.' '.mysql_error());
         
         $objects = array();
@@ -275,25 +305,27 @@ abstract class ActiveRecord
             $classname = get_class($this);
             $object = new $classname();            
             $object->setInternalData($data);
-            $object->exists = true;
-            
+            $object->exists = true;    
             $objects[] = $object;
         }
         
         return $objects;
     }
-    
+        
     public function getAllLike()
     {
-        $sql = "SELECT * FROM {$this->table}";
-        if(count($this->data) > 0)
-            $sql .= " WHERE ".implode(' AND ', $this->getPairedLikeFields($this->fieldObjects));
-            
+        $sql = "SELECT * FROM `{$this->database}`.`{$this->table}`";
+        if(count($this->getPairedLikeFields()) > 0)
+            $sql .= " WHERE ".implode(' AND ', $this->getPairedLikeFields());
+        
         if(count($this->orderbyFields) > 0)
             $sql .= " ORDER BY ".implode(',', $this->orderbyFields);
+
+        if(count($this->groupbyFields) > 0)
+            $sql .= " GROUP BY ".implode(',', $this->groupbyFields);
         
         $res = mysql_query($sql) or die('Error on line '.__LINE__.' '.mysql_error());        
-            
+        
         $objects = array();
         while($data = mysql_fetch_assoc($res))
         {
@@ -301,18 +333,18 @@ abstract class ActiveRecord
             $object = new $classname();
             $object->setInternalData($data);
             $object->exists = true;
-            
+        
             $objects[] = $object;
         }
         
         return $objects;
     }
-    
+        
     public function getAllWhere($whereClause)
     {
-        $sql = "SELECT * FROM {$this->table}";        
+        $sql = "SELECT * FROM `{$this->database}`.`{$this->table}`";        
         $sql .= " WHERE ".$whereClause;
-                
+        
         $res = mysql_query($sql) or die('Error on line '.__LINE__.' '.mysql_error());
         
         $objects = array();
@@ -322,13 +354,13 @@ abstract class ActiveRecord
             $object = new $classname();
             $object->setInternalData($data);
             $object->exists = true;
-            
+        
             $objects[] = $object;
         }
         
         return $objects;
     }
-    
+        
     public function setData($data)
     {
         foreach($data as $key => $val)
@@ -336,7 +368,7 @@ abstract class ActiveRecord
             $this->setAttrib($key, $val);
         }        
     }
-    
+        
     protected function setInternalData($data)
     {        
         foreach($data as $key => $val)
@@ -344,11 +376,9 @@ abstract class ActiveRecord
             $this->fieldObjects[$key]->setInternalValue($val);            
         }                
     }
-    
+        
     public function setAttrib($key, $val)
     {        
-        // Nee.. nog niet hier... pas als we met de database gaan praten! 
-        // $val = $this->quote($val);                
         
         $settername = 'set'.ucfirst($key);
         
@@ -359,11 +389,19 @@ abstract class ActiveRecord
         }
         else
         {
-            $this->fieldObjects[$key]->setValue($val);
-            return true;
+            if (array_key_exists($key, $this->fieldObjects))
+            {
+                $this->fieldObjects[$key]->setValue($val);
+                return true;
+            }
+            else
+            {
+                //trigger_error("Key: " . $key . "does not exist..", E_USER_WARNING);
+                return false;
+            }
         }
     }
-    
+        
     private function quote($value)
     {        
         if(get_magic_quotes_gpc())
@@ -372,10 +410,9 @@ abstract class ActiveRecord
         }                                
         
         $value = mysql_real_escape_string($value);
-                
         return $value;
     }
-    
+        
     public function getAttrib($key, $htmlentities = true)
     {
         $gettername = 'get'.ucfirst($key);
@@ -403,7 +440,7 @@ abstract class ActiveRecord
             }
         }
     }
-    
+        
     public function unsetAttrib($key)
     {
         if(isset($this->fieldObjects[$key]) && strlen(trim($this->fieldObjects[$key]->getValue())) > 0)
@@ -411,46 +448,46 @@ abstract class ActiveRecord
             $this->fieldObjects[$key]->setValue('');
         }
     }
-    
+        
     public function insert()
     {                
-        $sql = "INSERT INTO {$this->table} (".implode(', ', array_keys($this->fieldObjects)).")
-            VALUES (".implode(',', $this->getQuotedFields()).")";
+        $sql = "INSERT INTO `{$this->database}`.`{$this->table}` (`".implode('`, `', array_keys($this->fieldObjects))."`)
+        VALUES (".implode(',', $this->getQuotedFields()).")";
         $res = mysql_query($sql)
-            or die('Error on line '.__LINE__.' '.mysql_error().' : '.$sql);
+        or die('Error on line '.__LINE__.' '.mysql_error().' : '.$sql);
         
         return mysql_insert_id();
     }
-    
+        
     public function update()
     {
         $sql = "
             UPDATE
-                {$this->table}
+                `{$this->database}`.`{$this->table}`
             SET
                 ".implode(',', $this->getPairedFields($this->getFields()))."            
         ";
         
         if(count($this->fieldObjects) > 0)
             $sql .= " WHERE ".implode(' AND ', $this->getPairedConstraintFields());
-                
+        
         $res = mysql_query($sql)
-            or die('Error on line '.__LINE__.' '.mysql_error().' : '.$sql);
+        or die('Error on line '.__LINE__.' '.mysql_error().' : '.$sql);
         
         return mysql_affected_rows();
     }
-    
+        
     public function delete()
     {
-        $sql = "DELETE FROM {$this->table}";
+        $sql = "DELETE FROM `{$this->database}`.`{$this->table}`";
         if(count($this->fieldObjects) > 0)
-            $sql .= " WHERE ".implode(' AND ', $this->getPairedFields());
-            
+            $sql .= " WHERE ".implode(' AND ', $this->getPairedConstraintFields());
+        
         $res = mysql_query($sql) or die('Error on line '.__LINE__.' '.mysql_error()." : ".$sql);
-
+        
         return mysql_affected_rows(); 
     }
-    
+        
     protected function getPairedFields()
     {    
         $paired = array();        
@@ -465,7 +502,7 @@ abstract class ActiveRecord
         
         return $paired;
     }
-    
+        
     protected function getPairedConstraintFields()
     {
         $paired = array();
@@ -477,19 +514,22 @@ abstract class ActiveRecord
         
         return $paired;
     }
-    
+        
     protected function getPairedLikeFields()
     {        
         $paired = array();
         
         foreach($this->fieldObjects as $field)
         {
-            $paired[$field->getName()] = '`' . $field->getName()."` LIKE '".$this->quote($field->getValue())."'";
+            if($field->isTouched())
+            {
+                $paired[$field->getName()] = '`' . $field->getName()."` LIKE '".$this->quote($field->getValue())."'";
+            }
         }
         
         return $paired;
     }
-    
+        
     protected function getQuotedFields()
     {        
         $quoted = array();
@@ -501,7 +541,7 @@ abstract class ActiveRecord
         
         return $quoted;
     }
-    
+        
     public function getData()
     {
         $data = array();
@@ -513,17 +553,17 @@ abstract class ActiveRecord
         
         return $data;
     }
-    
+        
     public function addConstraint($constraint_field)
     {
         $this->constraints[] = $constraint_field;
     }
-    
+        
     public function exists()
     {
         return $this->exists;
     }
-    
+        
     public function getFields()
     {
         $f = array();
@@ -533,17 +573,17 @@ abstract class ActiveRecord
         }
         return $f;
     }    
-
+        
     public function getFieldObjects()
     {
         return $this->fieldObjects;
     }
-    
+        
     public function getFieldObject($key)
     {    
         return $this->fieldObjects[$key];
     }
-    
+        
     public function setAttribsFromPost()
     {
         if(isset($_POST))
@@ -557,7 +597,7 @@ abstract class ActiveRecord
             }
         }
     }
-    
+        
     public function setAttribsFromRequest()
     {
         if(isset($_REQUEST))
@@ -571,21 +611,20 @@ abstract class ActiveRecord
             }
         }
     }
-    
+        
     public function addOrderByField($field)
     {
         $this->orderbyFields[] = $field;
     }
-
+        
     public function addGroupByField($field)
     {
         $this->groupbyFields[] = $field;
-    }
-    
+    }        
     private function loadFields()
     {
-        $sql = 'SHOW COLUMNS FROM ' . $this->database . '.' . $this->table;
-        
+        $sql = 'SHOW COLUMNS FROM ' . "`{$this->database}`.`{$this->table}`";
+        //echo '[$sql: ' . $sql . ']<br/>' . "\n";
         $result = mysql_query($sql) or die('Error on line '.__LINE__.' '.mysql_error().' for '.$this->table);
         while ($row = mysql_fetch_object($result))
         {
@@ -602,47 +641,69 @@ abstract class ActiveRecord
                 $f->setType($row->Type);
                 $f->setSize(false);
             }
-            
+        
             if ($row->Key == "PRI")
             {
                 $f->setPrimary();
             }
-            
+        
             $this->fieldObjects[$f->getName()] = $f;
         } 
     }
-    
+        
     abstract function initTable();
     public function initDatabase() {}
     public function initRelations() {}
 }
-
+        
 class arRelation
 {
-    private $class;
-    private $hooktable;
-  
-  public function setClass($class)
-  {
+    private $class = false;
+    private $hooktable = false;
+    private $colThis = false;
+    private $colForeign = false;
+        
+    public function setClass($class)
+    {
         $this->class = $class;
-  }
-
+    }
+        
     public function getClass()
     {
         return $this->class;
     }
-
-  public function setHooktable($hooktable)
-  {
+        
+    public function setHooktable($hooktable)
+    {
         $this->hooktable = $hooktable;
-  }
-
+    }
+        
     public function getHooktable()
     {
         return $this->hooktable;
     }
-}
 
+    public function setColThis($col)
+    {
+        $this->colThis = $col;
+    }
+        
+    public function getColThis()
+    {
+        return $this->colThis;
+    }
+
+    public function setColForeign($col)
+    {
+        $this->colForeign = $col;
+    }
+        
+    public function getColForeign()
+    {
+        return $this->colForeign;
+    }
+}
+        
 class arField
 {
     private $name;
@@ -651,62 +712,66 @@ class arField
     private $primary = false;
     private $value;
     private $touched = false;
-    
+        
     public function setName($name)
     {
         $this->name = $name;
     }
+    
     public function getName()
     {
         return $this->name;
     }
-    
+        
     public function setType($type)
     {
         $this->type = $type;
     }
+
     public function getType()
     {
         return $this->type;
     }
-    
+        
     public function setSize($size)
     {
         $this->size = $size;
     }
+
     public function getSize()
     {
         return $this->size;
     }
-    
+        
     public function setPrimary()
     {
         $this->primary = true;
     }
+
     public function isPrimary()
     {
         return $this->primary;
     }
-     
+        
     public function setValue($value)
     {
         $this->value = $value;
         $this->touched = true;
     }
-
+        
     public function setInternalValue($value)
     {
         $this->value = $value;
     }
-
+        
     public function getValue()
     {
         return $this->value;
     }
- 
+        
     public function isTouched()
     {
         return $this->touched;
     }
-    }
+}
 ?>
