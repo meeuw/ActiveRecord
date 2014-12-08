@@ -1,6 +1,12 @@
 <?php
 /**
-Copyright (c) 2005 Leendert Brouwer, Matthijs Tempels, Richard Wolterink (Largest name, smallest contribution)
+Copyright (c) 2007 Matthijs Tempels, Leendert Brouwer, Richard Wolterink (Largest name, smallest contribution)
+
+--------------------------------------- README ----------------------------------
+THIS VERSION CACHES TABLE COLUMN INFO!
+make sure you make a <root>/inc/classes/tables folder that is writable by the
+webserver to make this version work if you set loadFieldsMethod to 'file'
+--------------------------------------- README ----------------------------------
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -18,7 +24,13 @@ FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
 THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-THE SOFTWARE.
+THE SOFTWARE. 
+
+
+OK.. here oes nothing.. radical changes in the behavior of AR :-) 
+Records are no longer fetched straigt away.. just the primary keys.. 
+
+
 **/
 
 abstract class ActiveRecord
@@ -28,10 +40,11 @@ abstract class ActiveRecord
     protected $constraints = array();
     protected $table = '';
     protected $database = '';
+    protected $loadFieldsMethod = 'db'; //Change this to file if you want the default setting to change!
     protected $exists = false;
     protected $orderbyFields = array();
     protected $groupbyFields = array();
-  protected $limitbyField;
+    protected $limitbyField;
     protected $oneToOnesF2P = array();
     protected $oneToOnesP2F = array();
     protected $oneToManys = array();
@@ -43,11 +56,16 @@ abstract class ActiveRecord
     const FOREIGN_TO_PRIMARY = 0;
     const PRIMARY_TO_FOREIGN = 1;
 
-    function ActiveRecord()
+    abstract function initTable();
+    protected function initDatabase() {}
+    protected function initLoadFields() {}
+    protected function initRelations() {}
+
+    public function __construct()
     {
         $this->initTable();
         $this->initDatabase();
-
+        $this->initLoadFields();
         $this->loadFields();
         $this->constraints[] = $this->getKeyField();
     }
@@ -62,6 +80,11 @@ abstract class ActiveRecord
         {
             $this->oneToOnesF2P[] = $object;
         }
+    }
+
+    public function updateTable($table)
+    {
+        $this->table = $table;
     }
 
     public function hasMany($object, $hooktable = false, $colThis = false, $colForeign = false)
@@ -112,6 +135,7 @@ abstract class ActiveRecord
     {
         if(!$this->foreignsLoaded || $force == true)
         {
+               // and fill all again.. 
             $this->initRelations();
 
             // load one to ones
@@ -123,12 +147,12 @@ abstract class ActiveRecord
             $this->foreignsLoaded = true;
         }
     }
-    
+
     public function loadForeignsExclude($excludes)
     {
         //$excludes is the array of objectnames which have to be excluded.
         $this->initRelations();
-        
+
         $dummyOneToOnesF2P = array();
         foreach ($this->oneToOnesF2P as $object)
         {
@@ -138,9 +162,9 @@ abstract class ActiveRecord
             }
         }
         $this->oneToOnesF2P = $dummyOneToOnesF2P;
-        
+
         $dummyOneToOnesP2F = array();
-        
+
         foreach ($this->oneToOnesP2F as $object)
         {
             if (!in_array(get_class($object), $excludes))
@@ -149,7 +173,7 @@ abstract class ActiveRecord
             }
         }
         $this->oneToOnesP2F = $dummyOneToOnesP2F;
-        
+
         $dummyOneToManys = array();
         foreach ($this->oneToManys as $arObject)
         {
@@ -162,10 +186,10 @@ abstract class ActiveRecord
 
         // load one to ones
         $this->loadForeignsOneToOne();
-        
+
         // load one to many
         $this->loadForeignsOneToMany();
-            
+
         $this->foreignsLoaded = true;
     }
 
@@ -173,18 +197,21 @@ abstract class ActiveRecord
     {
         //first clear old info..
         unset ($this->foreignOneToOneObjects);
-
+        $this->foreignOneToOneObjects = array(); 
+        
         //Primary to Foreign
         foreach($this->oneToOnesP2F as $relation)
         {
             if($this->getKeyField())
             {
                 $relation->setAttrib(
-                    $this->getKeyField()->getName(),
-                    $this->getAttrib($this->getKeyField()->getName())
+                $this->getKeyField()->getName(),
+                $this->getAttrib($this->getKeyField()->getName())
                 );
-                $relation->get();
-                $this->foreignOneToOneObjects[get_class($relation)] = $relation;
+                if ($relation->get())
+                { 
+                    $this->foreignOneToOneObjects[get_class($relation)] = $relation; 
+                }
             }
         }
 
@@ -194,13 +221,14 @@ abstract class ActiveRecord
             if($relation->getKeyField())
             {
                 $relation->setAttrib(
-                    $relation->getKeyField()->getName(),
-                    $this->getAttrib($relation->getKeyField()->getName())
+                $relation->getKeyField()->getName(),
+                $this->getAttrib($relation->getKeyField()->getName())
                 );
 
-                $relation->get();
-
-                $this->foreignOneToOneObjects[get_class($relation)] = $relation;
+                if ($relation->get())
+                {
+                    $this->foreignOneToOneObjects[get_class($relation)] = $relation; 
+                }
             }
         }
     }
@@ -209,7 +237,7 @@ abstract class ActiveRecord
     {
         //first clear old info..
         unset ($this->foreignOneToManysObjects);
-
+        $this->foreignOneToManysObjects = array();
         foreach($this->oneToManys as $relation_object)
         {
             $relation = $relation_object->getClass();
@@ -217,8 +245,8 @@ abstract class ActiveRecord
             if(!$relation_object->getHooktable())
             {
                 $relation->setAttrib(
-                    $this->getKeyField()->getName(),
-                    $this->getAttrib($this->getKeyField()->getName())
+                $this->getKeyField()->getName(),
+                $this->getAttrib($this->getKeyField()->getName())
                 );
                 foreach($relation->getAll() as $obj)
                 {
@@ -288,7 +316,7 @@ abstract class ActiveRecord
         }
     }
 
-    public function get($loadForeigns = false)
+    public function get($loadForeigns = false, $debug = false)
     {
         $this->exists = false;
         $sql = "SELECT * FROM " . $this->getTable();
@@ -296,8 +324,18 @@ abstract class ActiveRecord
         {
             $sql .= " WHERE ".implode(' AND ', $this->getPairedFields());
         }
-        $sql .= 'LIMIT 1';
-        //echo '[$sql: ' . $sql . ']<br/>' . "\n";
+
+        // Sorting in a single get can be useful as well! 
+        if(count($this->orderbyFields) > 0) 
+        { 
+            $sql .= " ORDER BY ".implode(',', $this->orderbyFields); 
+        } 
+         
+        $sql .= ' LIMIT 1';
+        if ($debug) 
+        { 
+            echo '[$sql: ' . $sql . ']<br/>' . "\n"; 
+        }
         $res = mysql_query($sql) or die('Error on line '.__LINE__.' '.mysql_error()." : ".$sql);
 
         if(mysql_num_rows($res) > 0)
@@ -313,28 +351,28 @@ abstract class ActiveRecord
     }
 
     public function getBySQL($sql)
-  {
-      $this->exists = false;
-      $res = mysql_query($sql) or die('Error on line '.__LINE__.' '.mysql_error()." : ".$sql);
-      if(mysql_num_rows($res) > 0)
-      {
-        $this->exists = true;
-        $objects = array();
-                while($data = mysql_fetch_assoc($res))
-                {
-                    $classname = get_class($this);
-                    $object = new $classname();
-                    $object->setInternalData($data);
-                    $object->exists = true;
-                    $objects[] = $object;
-                }
-                return $objects;
-      }
-      else
-      {
-          return false;
-      }
-  }
+    {
+        $this->exists = false;
+        $res = mysql_query($sql) or die('Error on line '.__LINE__.' '.mysql_error()." : ".$sql);
+        if(mysql_num_rows($res) > 0)
+        {
+            $this->exists = true;
+            $objects = array();
+            while($data = mysql_fetch_assoc($res))
+            {
+                $classname = get_class($this);
+                $object = new $classname();
+                $object->setInternalData($data);
+                $object->exists = true;
+                $objects[] = $object;
+            }
+            return $objects;
+        }
+        else
+        {
+            return false;
+        }
+    }
 
     public function getAll()
     {
@@ -431,8 +469,8 @@ abstract class ActiveRecord
     }
 
     /* -----------------------------------
-       DATA FETCHING RELATED FUNCTIONS
-       ----------------------------------- */
+    DATA FETCHING RELATED FUNCTIONS
+    ----------------------------------- */
 
 
     public function setData($data)
@@ -550,6 +588,7 @@ abstract class ActiveRecord
     public function update()
     {
         $sql = "UPDATE " . $this->getTable() . " SET " . implode(',', $this->getPairedFields());
+         
         if(count($this->getPairedConstraintFields()) > 0)
         {
             $sql .= " WHERE ".implode(' AND ', $this->getPairedConstraintFields());
@@ -566,12 +605,12 @@ abstract class ActiveRecord
         //Hier de mogelijkheid voor het verwijderen van PairedFields weggehaald.
         //Dit omdat ik het niet aannemelijk vind dat je alleen het eerste record wilt verwijderen met de naam richard
         //waarbij naam geen primary key is.
-        
+
         if(count($this->getPairedConstraintFields()) > 0)
         {
             $sql = "DELETE FROM " . $this->getTable() . " WHERE " . implode(' AND ', $this->getPairedConstraintFields());
         }
-        
+
         $res = mysql_query($sql) or die('Error on line '.__LINE__.' '.mysql_error()." : ".$sql);
 
         return mysql_affected_rows();
@@ -688,10 +727,10 @@ abstract class ActiveRecord
         return $this->fieldObjects[$key];
     }
 
-  public function setLimitByField($val)
-  {
-      $this->limitbyField = $val;
-  }
+    public function setLimitByField($val)
+    {
+        $this->limitbyField = $val;
+    }
 
     public function setAttribsFromPost()
     {
@@ -721,6 +760,37 @@ abstract class ActiveRecord
         }
     }
 
+    public function setAttribsFromSession($sessionkey = '')
+    {
+        //$sessionkey is an optional key in the session var
+        if ($sessionkey != '')
+        {
+            if(isset($_SESSION[$sessionkey]))
+            {
+                foreach($_SESSION[$sessionkey] as $key => $val)
+                {
+                    if(in_array($key, $this->getFields()))
+                    {
+                        $this->setAttrib($key, $val);
+                    }
+                }
+            }
+        }
+        else
+        {
+            if(isset($_SESSION))
+            {
+                foreach($_SESSION as $key => $val)
+                {
+                    if(in_array($key, $this->getFields()))
+                    {
+                        $this->setAttrib($key, $val);
+                    }
+                }
+            }
+        }
+    }
+
     public function addOrderByField($field)
     {
         $this->orderbyFields[] = $field;
@@ -731,41 +801,114 @@ abstract class ActiveRecord
         $this->groupbyFields[] = $field;
     }
 
-    private function loadFields()
+    public function loadFields()
     {
-        $sql = 'SHOW COLUMNS FROM ' . $this->getTable();
-        //echo '[$sql: ' . $sql . ']<br/>' . "\n";
-        $result = mysql_query($sql) or die('Error on line '.__LINE__.' '.mysql_error().' for '.$this->getTable());
-        while ($row = mysql_fetch_object($result))
+        if (strtoupper($this->loadFieldsMethod) == 'DB')
         {
-            $f = new arField();
-            $f->setName($row->Field);
-            $t = explode("(", $row->Type);
-            if (count($t) > 1)
+            $sql = 'SHOW COLUMNS FROM ' . $this->getTable();
+            //echo '[$sql: ' . $sql . ']<br/>' . "\n";
+            $result = mysql_query($sql) or die('Error on line '.__LINE__.' '.mysql_error().' for '.$this->table);
+            while ($row = mysql_fetch_object($result))
             {
-                $f->setType($t[0]);
-                $f->setSize((int)$t[1]);
+                $f = new arField();
+                $f->setName($row->Field);
+                $t = explode("(", $row->Type);
+                if (count($t) > 1)
+                {
+                    $f->setType($t[0]);
+                    $f->setSize((int)$t[1]);
+                }
+                else
+                {
+                    $f->setType($row->Type);
+                    $f->setSize(false);
+                }
+
+                if ($row->Key == "PRI")
+                {
+                    $f->setPrimary();
+                }
+
+                $this->fieldObjects[$f->getName()] = $f;
+            }
+        }
+        elseif (strtoupper($this->loadFieldsMethod) == 'FILE')
+        {
+            // Ok for high volume sites this is a good idea:
+
+            $includefile = dirname(__FILE__) . '/tables/' . $this->getTableFile();
+
+            if (file_exists($includefile) && (filectime($includefile) + 30) > time())
+            {
+                //deze is nog goed..
             }
             else
             {
-                $f->setType($row->Type);
-                $f->setSize(false);
+                $this->createTableInclude(); //eerst opnieuw maken
             }
+            include_once($includefile);
+            $t = str_replace('.','_', $this->getTableFile());
+            $cols = new $t;
 
-            if ($row->Key == "PRI")
+            foreach ($cols->fields as $field)
             {
-                $f->setPrimary();
-            }
+                if (!array_key_exists($field['FIELD'], $this->fieldObjects))
+                {
+                    $f = new arField();
+                    $f->setName($field['FIELD']);
+                    $t = explode("(", $field['TYPE']);
+                    if (count($t) > 1)
+                    {
+                        $f->setType($t[0]);
+                        $f->setSize((int)$t[1]);
+                    }
+                    else
+                    {
+                        $f->setType($field['TYPE']);
+                        $f->setSize(false);
+                    }
 
-            $this->fieldObjects[$f->getName()] = $f;
+                    if ($field['KEY'] == "PRI")
+                    {
+                        $f->setPrimary();
+                    }
+
+                    $this->fieldObjects[$f->getName()] = $f;
+                }
+            }
+        }
+        else
+        {
+            die('unknown loadFieldsMethod, check initLoadFields function');
         }
     }
 
-    abstract function initTable();
-    protected function initDatabase() {}
-    protected function initRelations() {}
 
-    protected function getTable()
+    private function createTableInclude()
+    {
+        $sql = 'SHOW COLUMNS FROM ' . $this->getTable();
+        $result = mysql_query($sql) or die('Error on line '.__LINE__.' '.mysql_error().' for '.$this->getTable());
+        $output = "";
+        $output .= '<?php' . "\n";
+        $output .= 'class ' . str_replace('.','_', $this->getTableFile()) . "\n";
+        $output .= '{' . "\n";
+        $output .= "\t" . 'public $fields = array();' . "\n";
+        $output .= "\t" . 'function __construct()' . "\n";
+        $output .= "\t" . '{' . "\n";
+        while ($row = mysql_fetch_object($result))
+        {
+            $output .= "\t\t" . '$this->fields[] = Array("FIELD"=>"' . $row->Field . '", "TYPE"=>"' . $row->Type . '", "KEY"=>"' . $row->Key . '");' . "\n";
+        }
+        $output .= "\t" . '}' . "\n";
+        $output .= '}' . "\n";
+        $output .= '?>';
+
+        $includefile = dirname(__FILE__) . '/tables/' . $this->getTableFile();
+        file_put_contents($includefile, $output);
+        @chmod($includefile, 0777);
+    }
+
+    public function getTable()
     {
         $t = '';
         if (strlen($this->database) > 0)
@@ -783,6 +926,27 @@ abstract class ActiveRecord
         }
         return $t;
     }
+
+    public function getTableFile()
+    {
+        $t = 'table.';
+        if (strlen($this->database) > 0)
+        {
+            $t .= $this->database . '.';
+        }
+
+        if (strlen($this->table) > 0)
+        {
+            $t .= $this->table;
+        }
+        else
+        {
+            return false;
+        }
+        $t .= ".php";
+        return $t;
+    }
+
     protected function getHookTable($relation_object)
     {
         $t = '';
