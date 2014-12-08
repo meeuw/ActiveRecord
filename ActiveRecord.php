@@ -31,6 +31,7 @@ abstract class ActiveRecord
     protected $exists = false;
     protected $orderbyFields = array();
     protected $groupbyFields = array();
+  protected $limitbyField; 
     protected $oneToOnesF2P = array();
     protected $oneToOnesP2F = array();
     protected $oneToManys = array();
@@ -106,52 +107,7 @@ abstract class ActiveRecord
         }
         return false;
     }
-        
-    public function get($loadForeigns = false)
-    {
-        $this->exists = false;
-        
-        $sql = "SELECT * FROM `{$this->database}`.`{$this->table}`";
-        if(count($this->fieldObjects) > 0)
-            $sql .= " WHERE ".implode(' AND ', $this->getPairedFields($this->getFields()));
-        $sql .= 'LIMIT 1';
-        //echo '[$sql: ' . $sql . ']<br/>' . "\n";
-        $res = mysql_query($sql) or die('Error on line '.__LINE__.' '.mysql_error()." : ".$sql);
-        
-        if(mysql_num_rows($res) > 0)
-        {
-            $this->exists = true;            
-            $this->setInternalData(mysql_fetch_assoc($res));
-        }
-        
-        if($loadForeigns)
-        {
-            $this->loadForeigns();
-        }
-        
-        return $this->exists;
-    }
-        
-    public function getBySQL($sql)
-    {
-        $this->exists = false;
-        
-        $res = mysql_query($sql) or die('Error on line '.__LINE__.' '.mysql_error()." : ".$sql);
-        
-        if(mysql_num_rows($res) > 0)
-        {
-            $this->exists = true;
-            $this->setInternalData(mysql_fetch_assoc($res));
-        }
-        
-        if(!$this->lazy)
-        {
-            $this->loadForeigns();
-        }
-        
-        return $this->exists;
-    }
-        
+
     public function loadForeigns()
     {        
         if(!$this->foreignsLoaded)
@@ -261,41 +217,87 @@ abstract class ActiveRecord
         
     public function getOneToOne($objectName)
     {
-        if (array_key_exists($objectName, $this->foreignOneToOneObjects))
+        if (array_key_exists($objectName, $this->foreignOneToOneObjects) && $this->foreignOneToOneObjects[$objectName]->getAttrib($this->foreignOneToOneObjects[$objectName]->getKeyField()->getName()) != '')
         {
             return $this->foreignOneToOneObjects[$objectName];    
         }
         else
         {
-            //echo ("AR::OnToOne: Key $objectName does not exist");
             return false;
         }
     }
         
     public function getOneToMany($objectName)
     {    
-        if (array_key_exists($objectName, $this->foreignOneToManysObjects))
+        if (array_key_exists($objectName, $this->foreignOneToManysObjects) && count($this->foreignOneToManysObjects[$objectName]) > 0)
         {
             return $this->foreignOneToManysObjects[$objectName];
         }
         else
         {
-            //echo ("AR::OnToMany: Key $objectName does not exist");
             return false;
         }
     }
+
+    public function get($loadForeigns = false)
+    {
+        $this->exists = false;
+        $sql = "SELECT * FROM `{$this->database}`.`{$this->table}`";
+        if(count($this->getPairedFields()) > 0)
+        {
+            $sql .= " WHERE ".implode(' AND ', $this->getPairedFields());
+        }
+        $sql .= 'LIMIT 1';
+        //echo '[$sql: ' . $sql . ']<br/>' . "\n";
+        $res = mysql_query($sql) or die('Error on line '.__LINE__.' '.mysql_error()." : ".$sql);
         
+        if(mysql_num_rows($res) > 0)
+        {
+            $this->exists = true;            
+            $this->setInternalData(mysql_fetch_assoc($res));
+        }
+        if($loadForeigns)
+        {
+            $this->loadForeigns();
+        }
+        return $this->exists;
+    }
+        
+    public function getBySQL($sql, $loadForeigns)
+    {
+        $this->exists = false;
+        $res = mysql_query($sql) or die('Error on line '.__LINE__.' '.mysql_error()." : ".$sql);
+        if(mysql_num_rows($res) > 0)
+        {
+            $this->exists = true;
+            $this->setInternalData(mysql_fetch_assoc($res));
+        }
+        if($loadForeigns)
+        {
+            $this->loadForeigns();
+        }
+        return $this->exists;
+    }
+
     public function getAll()
     {
         $sql = "SELECT * FROM `{$this->database}`.`{$this->table}`";
         if(count($this->getPairedFields()) > 0)
+        {
             $sql .= " WHERE ".implode(' AND ', $this->getPairedFields());
-        
+        }
         if(count($this->orderbyFields) > 0)
+        {
             $sql .= " ORDER BY ".implode(',', $this->orderbyFields);
-        
+        }
         if(count($this->groupbyFields) > 0)
+        {
             $sql .= " GROUP BY ".implode(',', $this->groupbyFields);
+        }
+        if(strlen($this->limitbyField) > 0) 
+        {
+            $sql .= " LIMIT " . $this->limitbyField; 
+        }
         
         $res = mysql_query($sql) or die('Error on line '.__LINE__.' '.mysql_error());
         
@@ -316,13 +318,24 @@ abstract class ActiveRecord
     {
         $sql = "SELECT * FROM `{$this->database}`.`{$this->table}`";
         if(count($this->getPairedLikeFields()) > 0)
+        {
             $sql .= " WHERE ".implode(' AND ', $this->getPairedLikeFields());
+        }
         
         if(count($this->orderbyFields) > 0)
+        {
             $sql .= " ORDER BY ".implode(',', $this->orderbyFields);
-
+        }
+        
         if(count($this->groupbyFields) > 0)
+        {
             $sql .= " GROUP BY ".implode(',', $this->groupbyFields);
+        }
+    
+        if(strlen($this->limitbyField) > 0) 
+        {
+            $sql .= " LIMIT " . $this->limitbyField; 
+        }
         
         $res = mysql_query($sql) or die('Error on line '.__LINE__.' '.mysql_error());        
         
@@ -361,6 +374,11 @@ abstract class ActiveRecord
         return $objects;
     }
         
+    /* -----------------------------------
+       DATA FETCHING RELATED FUNCTIONS 
+       ----------------------------------- */
+
+
     public function setData($data)
     {
         foreach($data as $key => $val)
@@ -369,19 +387,29 @@ abstract class ActiveRecord
         }        
     }
         
-    protected function setInternalData($data)
+    private function setInternalData($data)
     {        
         foreach($data as $key => $val)
         {
             $this->fieldObjects[$key]->setInternalValue($val);            
         }                
     }
+
+    private function quote($value)
+    {        
+        if(get_magic_quotes_gpc())
+        {            
+            $value = stripslashes($value);
+        }                                
+        
+        $value = mysql_real_escape_string($value);
+        return $value;
+    }
+
         
     public function setAttrib($key, $val)
     {        
-        
         $settername = 'set'.ucfirst($key);
-        
         if(method_exists($this, $settername))
         {
             $this->fieldObjects[$key]->setValue($this->$settername($val));
@@ -396,21 +424,9 @@ abstract class ActiveRecord
             }
             else
             {
-                //trigger_error("Key: " . $key . "does not exist..", E_USER_WARNING);
                 return false;
             }
         }
-    }
-        
-    private function quote($value)
-    {        
-        if(get_magic_quotes_gpc())
-        {            
-            $value = stripslashes($value);
-        }                                
-        
-        $value = mysql_real_escape_string($value);
-        return $value;
     }
         
     public function getAttrib($key, $htmlentities = true)
@@ -465,11 +481,13 @@ abstract class ActiveRecord
             UPDATE
                 `{$this->database}`.`{$this->table}`
             SET
-                ".implode(',', $this->getPairedFields($this->getFields()))."            
+                ".implode(',', $this->getPairedFields())."            
         ";
         
-        if(count($this->fieldObjects) > 0)
+        if(count($this->getPairedConstraintFields()) > 0)
+        {
             $sql .= " WHERE ".implode(' AND ', $this->getPairedConstraintFields());
+        }
         
         $res = mysql_query($sql)
         or die('Error on line '.__LINE__.' '.mysql_error().' : '.$sql);
@@ -480,9 +498,10 @@ abstract class ActiveRecord
     public function delete()
     {
         $sql = "DELETE FROM `{$this->database}`.`{$this->table}`";
-        if(count($this->fieldObjects) > 0)
+        if(count($this->getPairedConstraintFields()) > 0)
+        {
             $sql .= " WHERE ".implode(' AND ', $this->getPairedConstraintFields());
-        
+        }
         $res = mysql_query($sql) or die('Error on line '.__LINE__.' '.mysql_error()." : ".$sql);
         
         return mysql_affected_rows(); 
@@ -584,6 +603,11 @@ abstract class ActiveRecord
         return $this->fieldObjects[$key];
     }
         
+  public function setLimitByField($val) 
+  { 
+      $this->limitbyField = $val; 
+  } 
+
     public function setAttribsFromPost()
     {
         if(isset($_POST))
@@ -621,6 +645,7 @@ abstract class ActiveRecord
     {
         $this->groupbyFields[] = $field;
     }        
+    
     private function loadFields()
     {
         $sql = 'SHOW COLUMNS FROM ' . "`{$this->database}`.`{$this->table}`";
@@ -652,8 +677,8 @@ abstract class ActiveRecord
     }
         
     abstract function initTable();
-    public function initDatabase() {}
-    public function initRelations() {}
+    protected function initDatabase() {}
+    protected function initRelations() {}
 }
         
 class arRelation
