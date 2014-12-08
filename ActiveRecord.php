@@ -1,4 +1,26 @@
 <?php
+/**
+Copyright (c) 2005 Leendert Brouwer
+
+Permission is hereby granted, free of charge, to any person obtaining a copy 
+of this software and associated documentation files (the "Software"), to deal 
+in the Software without restriction, including without limitation the rights 
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell 
+copies of the Software, and to permit persons to whom the Software is 
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included 
+in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR 
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, 
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL 
+THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER 
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, 
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN 
+THE SOFTWARE.
+**/
+
 abstract class ActiveRecord
 {	
 	protected $data = array();
@@ -6,17 +28,21 @@ abstract class ActiveRecord
 	protected $constraints = array();
 	protected $table;
 	protected $exists = false;
+	protected $orderbyFields = array();
+	protected $groupbyFields = array();
 	
 	function ActiveRecord()
 	{
-		$this->initFields();
 		$this->initTable();
+		$this->initFields();		
 		
 		$this->constraints[] = $this->fields[0];
 	}
 	
 	public function get()
 	{
+		$this->exists = false;
+		
 		$sql = "SELECT * FROM {$this->table}";
 		if(count($this->data) > 0)
 			$sql .= " WHERE ".implode(' AND ', $this->getPairedFields($this->data));
@@ -25,10 +51,11 @@ abstract class ActiveRecord
 		
 		if(mysql_num_rows($res) > 0)
 		{
-			$this->exists = true;
+			$this->exists = true;			
+			$this->data = mysql_fetch_assoc($res);
 		}
 		
-		$this->data = mysql_fetch_assoc($res);
+		return $this->exists;
 	}
 	
 	public function getAll()
@@ -36,6 +63,12 @@ abstract class ActiveRecord
 		$sql = "SELECT * FROM {$this->table}";
 		if(count($this->data) > 0)
 			$sql .= " WHERE ".implode(' AND ', $this->getPairedFields($this->data));
+			
+		if(count($this->orderbyFields) > 0)
+			$sql .= " ORDER BY ".implode(',', $this->orderbyFields);
+
+		if(count($this->groupbyFields) > 0)
+			$sql .= " GROUP BY ".implode(',', $this->groupbyFields);
 		
 		$res = mysql_query($sql) or die(mysql_error());
 		
@@ -44,7 +77,7 @@ abstract class ActiveRecord
 		{
 			$classname = get_class($this);
 			$object = new $classname();
-			$object->setData($data);
+			$object->setInternalData($data);
 			$object->exists = true;
 			
 			$objects[] = $object;
@@ -58,6 +91,9 @@ abstract class ActiveRecord
 		$sql = "SELECT * FROM {$this->table}";
 		if(count($this->data) > 0)
 			$sql .= " WHERE ".implode(' AND ', $this->getPairedLikeFields($this->data));
+			
+		if(count($this->orderbyFields) > 0)
+			$sql .= " ORDER BY ".implode(',', $this->orderbyFields);
 		
 		$res = mysql_query($sql) or die(mysql_error());		
 			
@@ -66,7 +102,28 @@ abstract class ActiveRecord
 		{
 			$classname = get_class($this);
 			$object = new $classname();
-			$object->setData($data);
+			$object->setInternalData($data);
+			$object->exists = true;
+			
+			$objects[] = $object;
+		}
+		
+		return $objects;
+	}
+	
+	public function getAllWhere($whereClause)
+	{
+		$sql = "SELECT * FROM {$this->table}";		
+		$sql .= " WHERE ".$whereClause;
+				
+		$res = mysql_query($sql) or die(mysql_error());
+		
+		$objects = array();
+		while($data = mysql_fetch_assoc($res))
+		{
+			$classname = get_class($this);
+			$object = new $classname();
+			$object->setInternalData($data);
 			$object->exists = true;
 			
 			$objects[] = $object;
@@ -77,18 +134,30 @@ abstract class ActiveRecord
 	
 	public function setData($data)
 	{
-		$this->data = $data;
+		foreach($data as $key => $val)
+		{
+			$this->setAttrib($key, $val);
+		}		
+	}
+	
+	protected function setInternalData($data)
+	{
+		foreach($data as $key => $val)
+		{
+			$this->data[$key] = $val;
+		}		
 	}
 	
 	public function setAttrib($key, $val)
-	{
-		$val = mysql_real_escape_string($val);
+	{		
+		$val = $this->quote($val);				
 		
 		$settername = 'set'.ucfirst($key);
 		
 		if(method_exists($this, $settername))
 		{
-			return $this->$settername($val);
+			$this->data[$key] = $this->$settername($val);
+			return true;
 		}
 		else
 		{
@@ -97,7 +166,19 @@ abstract class ActiveRecord
 		}
 	}
 	
-	public function getAttrib($key)
+	private function quote($value)
+	{		
+		if(get_magic_quotes_gpc())
+		{			
+			$value = stripslashes($value);
+		}								
+		
+		$value = mysql_real_escape_string($value);
+				
+		return $value;
+	}
+	
+	public function getAttrib($key, $htmlentities = true)
 	{
 		$gettername = 'get'.ucfirst($key);
 		
@@ -109,7 +190,14 @@ abstract class ActiveRecord
 		{
 			if(isset($this->data[$key]))
 			{
-				return $this->data[$key];
+				if($htmlentities)
+				{
+					return htmlentities($this->data[$key]);
+				}
+				else
+				{
+					return $this->data[$key];
+				}
 			}
 			else
 			{
@@ -117,14 +205,14 @@ abstract class ActiveRecord
 			}
 		}
 	}
-		
-	public function load()
+	
+	public function unsetAttrib($key)
 	{
-		$res = mysql_query("SELECT * FROM {$this->table} WHERE {$this->IDField} = '{$this->id}'")
-			or die(mysql_error());
-			
-		$this->data = mysql_fetch_assoc($res);
-	}
+		if(isset($this->data[$key]))
+		{
+			unset($this->data[$key]);
+		}
+	}	
 	
 	public function insert()
 	{				
@@ -171,6 +259,7 @@ abstract class ActiveRecord
 		
 		foreach($paired as $key => $val)
 		{
+			//$paired[$key] = $key." = '".addslashes($val)."'";
 			$paired[$key] = $key." = '".$val."'";
 		}
 		
@@ -204,8 +293,7 @@ abstract class ActiveRecord
 	protected function getQuotedFields()
 	{
 		$quoted = $this->data;
-		
-		$num = count($quoted);
+				
 		foreach($quoted as $key => $val)
 		{
 			$quoted[$key] = "'{$val}'";			
@@ -216,7 +304,14 @@ abstract class ActiveRecord
 	
 	public function getData()
 	{
-		return $this->data;
+		$data = array();
+		
+		foreach($this->data as $key => $val)
+		{
+			$data[$key] = $this->getAttrib($key);
+		}
+		
+		return $data;
 	}
 	
 	public function addConstraint($constraint_field)
@@ -242,10 +337,49 @@ abstract class ActiveRecord
 			{
 				if(in_array($key, $this->fields))
 				{
-					$this->data[$key] = $val;
+					$this->setAttrib($key, $val);
 				}
 			}
 		}
+	}
+	
+	public function setAttribsFromRequest()
+	{
+		if(isset($_REQUEST))
+		{
+			foreach($_REQUEST as $key => $val)
+			{
+				if(in_array($key, $this->fields))
+				{
+					$this->setAttrib($key, $val);
+				}
+			}
+		}
+	}
+	
+	public function printConfigStats()
+	{
+		$query = "SELECT ".implode(', ', $this->fields)." FROM {$this->table}";
+		$rs = mysql_query($query);
+		
+		if($rs)
+		{
+			echo 'OK';
+		}
+		else
+		{
+			echo 'The query "'.$query.'" generated errors: '.mysql_error();
+		}
+	}
+	
+	public function addOrderByField($field)
+	{
+		$this->orderbyFields[] = $field;
+	}
+
+	public function addGroupByField($field)
+	{
+		$this->groupbyFields[] = $field;
 	}
 	
 	abstract function initFields();	
