@@ -1,6 +1,6 @@
 <?php
 /**
-Copyright (c) 2005 Leendert Brouwer, Matthijs Tempels
+Copyright (c) 2005 Leendert Brouwer, Matthijs Tempels, Richard Wolterink (Largest name, smallest contribution)
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -123,7 +123,52 @@ abstract class ActiveRecord
             $this->foreignsLoaded = true;
         }
     }
+    
+    public function loadForeignsExclude($excludes)
+    {
+        //$excludes is the array of objectnames which have to be excluded.
+        $this->initRelations();
         
+        $dummyOneToOnesF2P = array();
+        foreach ($this->oneToOnesF2P as $object)
+        {
+            if (!in_array(get_class($object), $excludes))
+            {
+                $dummyOneToOnesF2P[] = $object;
+            }
+        }
+        $this->oneToOnesF2P = $dummyOneToOnesF2P;
+        
+        $dummyOneToOnesP2F = array();
+        
+        foreach ($this->oneToOnesP2F as $object)
+        {
+            if (!in_array(get_class($object), $excludes))
+            {
+                $dummyOneToOnesP2F[] = $object;
+            }
+        }
+        $this->oneToOnesP2F = $dummyOneToOnesP2F;
+        
+        $dummyOneToManys = array();
+        foreach ($this->oneToManys as $arObject)
+        {
+            if (!in_array(get_class($arObject->getClass()), $excludes))
+            {
+                $dummyOneToManys[] = $arObject;
+            }
+        }
+        $this->oneToManys = $dummyOneToManys;
+
+        // load one to ones
+        $this->loadForeignsOneToOne();
+        
+        // load one to many
+        $this->loadForeignsOneToMany();
+            
+        $this->foreignsLoaded = true;
+    }
+
     protected function loadForeignsOneToOne()
     {
         //first clear old info..
@@ -197,7 +242,7 @@ abstract class ActiveRecord
 
                 $res = mysql_query($query)
                 or die('Error on line '.__LINE__.' '.mysql_error());
-        
+
                 while($row = mysql_fetch_assoc($res))
                 {
                     $objName = get_class($relation);
@@ -574,6 +619,8 @@ abstract class ActiveRecord
 
     protected function getPairedLikeFields()
     {
+        // this is obsolete.. we need to check if we still use it somewhere...
+
         $paired = array();
 
         foreach($this->fieldObjects as $field)
